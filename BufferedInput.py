@@ -1,3 +1,4 @@
+import datetime
 import numpy as np
 from nemo.core.classes import IterableDataset
 from nemo.core.neural_types import NeuralType, AudioSignal, LengthsType
@@ -5,7 +6,7 @@ import torch
 from torch.utils.data import DataLoader
 
 class BufferedInput:
-    def __init__(self, frame_len = 1, frame_overlap=2):
+    def __init__(self, frame_len = 1, frame_overlap=2, clear_after = 5):
         self.sr = 16000
         self.frame_len = frame_len
         self.n_frame_len = int(self.sr * self.frame_len)
@@ -16,11 +17,19 @@ class BufferedInput:
         self._buffer = np.zeros(shape=self.n_frame_overlap + self.n_frame_len,
                                dtype=np.float32)
         
+        self.last_update = datetime.datetime.now()
+        self.clear_after = clear_after
+        
         self.reset()
     
     def update_buffer(self, frame):
+        if (datetime.datetime.now() - self.last_update).total_seconds() >= self.clear_after:
+            self.reset()
+        
         self._buffer[:-self.n_frame_len] = self._buffer[self.n_frame_len:]
         self._buffer[-self.n_frame_len:] = frame
+        
+        self.last_update = datetime.datetime.now()
     
     @property
     def buffer(self):
