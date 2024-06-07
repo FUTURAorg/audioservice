@@ -3,18 +3,17 @@ import os
 import grpc
 import logging 
 
-from BufferedInput import BufferedInput
-from backends.CTCBackend import CTCBackend, NVIDIACTCBackend
-from backends.WhisperBackend import WhisperBackend
+from backends.BufferedInput import BufferedInput
 
 from futuracommon.protos import audioservice_pb2, audioservice_pb2_grpc
 from futuracommon.protos import nlp_pb2_grpc, nlp_pb2
 from futuracommon.protos import healthcheck_pb2, healthcheck_pb2_grpc
+from futuracommon.protos import backend_change_pb2, backend_change_pb2_grpc
+from futuracommon.SessionManager.RedisManager import RedisSessionManager
 
 import numpy as np
 
-from futuracommon.SessionManager.RedisManager import RedisSessionManager
-
+from backends.Holder import BackendHolder
 
 logging.basicConfig(level=logging.DEBUG, format='%(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('AUDIOSERVICE')
@@ -26,8 +25,7 @@ REDIS_PORT = 6379
 REDIS_DB = 0
 
 sessionManager = RedisSessionManager(REDIS_HOST, REDIS_PORT, REDIS_DB)
-# model = WhisperBackend()
-model = CTCBackend()
+
 
 class AudioStreamer(audioservice_pb2_grpc.AudioStreamerServicer):
     
@@ -35,6 +33,7 @@ class AudioStreamer(audioservice_pb2_grpc.AudioStreamerServicer):
         super().__init__()
         self.buffer = BufferedInput(frame_len=0.5, frame_overlap=6, clear_after=3)
         self.prev_text = ''
+        self.backend = BackendHolder()
     
     def StreamAudio(self, request_iterator, context):
         channel = grpc.insecure_channel(NLP_SERVICE_ADDR)
@@ -44,7 +43,7 @@ class AudioStreamer(audioservice_pb2_grpc.AudioStreamerServicer):
             signal = np.frombuffer(audio_chunk.audio_data, dtype=np.float32)
             self.buffer.update_buffer(signal)
             
-            text, lang = model.transcribe(self.buffer.buffer)
+            text, lang = self.backend.transcribe(self.buffer.buffer)
             print(text, lang)
         
             if lang == 'ru' and text != '' and text != self.prev_text:
@@ -60,14 +59,27 @@ class AudioStreamer(audioservice_pb2_grpc.AudioStreamerServicer):
 
 class HealthServicer(healthcheck_pb2_grpc.HealthServiceServicer):
     def Check(self, request, context):
-        
-        return healthcheck_pb2.HealthResponse(status=1, current_backend=f"{model.name} ({model.device})")
- 
+        backend = BackendHolder()
+        return healthcheck_pb2.HealthResponse(status=1, current_backend=f"{backend.name} ({backend.device})")
+
+
+class BackendChangerService(backend_change_pb2_grpc.BackendServiceServicer):
+    def __init__(self):
+        self.backends = BackendHolder()
+    
+    def ChangeBackend(self, request, context):
+        success, message = self.backends.change_backend(request.backend_name)
+        return backend_change_pb2.BackendStatus(success=success, message=message)
+    
+    def GetBackendList(self, request, context):
+        backends = self.backends.list_backends()
+        return backend_change_pb2.BackendList(backends=backends)
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     audioservice_pb2_grpc.add_AudioStreamerServicer_to_server(AudioStreamer(), server)
     healthcheck_pb2_grpc.add_HealthServiceServicer_to_server(HealthServicer(), server)
+    backend_change_pb2_grpc.add_BackendServiceServicer_to_server(BackendChangerService(), server)
     server.add_insecure_port('[::]:50050')
     server.start()
     logger.info("Listening...")

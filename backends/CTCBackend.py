@@ -3,7 +3,7 @@ import datetime
 
 import numpy as np
 import torch
-from BufferedInput import AudioDataLayer, BufferedInput
+from .BufferedInput import AudioDataLayer, BufferedInput
 from torch.utils.data import DataLoader
 from nemo.core.classes import IterableDataset
 
@@ -16,9 +16,11 @@ class CTCBackend(ASRBackend):
     def __init__(self):
         start_load = datetime.datetime.now()
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.model = EncDecCTCModelBPE.restore_from('audioservice/models/ctcsmall.nemo', map_location=self.device)
+        # self.model = EncDecCTCModelBPE.restore_from('E:/Programming/ThesisBackend/audioservice/models/ctcsmall.nemo', map_location=self.device)
+        self.model = EncDecCTCModelBPE.from_pretrained(model_name="stt_ru_conformer_ctc_large")
         self.model = self.model.to(self.device)
         self.model.eval()
+        self.name = 'CTCBackend'
         
         cfg = copy.deepcopy(self.model._cfg)
         self.vocab = list(cfg.decoder.vocabulary)
@@ -61,6 +63,7 @@ class CTCBackend(ASRBackend):
     
     def greedy_merge(self, s):
         s_merged = ''
+        self.prev_char = ''
         
         for i in range(len(s)):
             if s[i] != self.prev_char:
@@ -71,4 +74,21 @@ class CTCBackend(ASRBackend):
     
     @torch.no_grad()
     def transcribe(self, frame):
-        return self.greedy_merge(self._decode(frame)), 'ru'
+        t = self.greedy_merge(self._decode(frame))
+        t = t.replace('▁', ' ')
+        return t, 'ru'
+    
+
+
+class NVIDIACTCBackend(ASRBackend):
+    def __init__(self):
+        start_load = datetime.datetime.now()
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.model = EncDecCTCModelBPE.from_pretrained(model_name="stt_ru_conformer_ctc_large")
+        self.model.to(self.device)
+        print(f"Loaded model conformerCTC on device {self.device} in {(datetime.datetime.now() - start_load).total_seconds()} seconds")
+    
+    def transcribe(self, frame):
+        logits = self.infer_signal(frame).cpu().numpy()[0]
+        
+        return decoded
